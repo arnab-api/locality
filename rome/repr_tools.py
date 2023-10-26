@@ -147,7 +147,18 @@ def get_reprs_at_idxs(
                 model(**contexts_tok)
 
         if tin:
-            _process(tr.input, batch_idxs, "in")
+            # print("calling from input", module_name, tin, tout)
+            # print("input_kw:", tr.input_kw)
+            # print("input:", tr.input)
+            if "gpt-j" in model.config._name_or_path.lower():
+                inp = (
+                    tr.input_kw["hidden_states"]
+                    if ".mlp.fc_out" not in module_name
+                    else tr.input
+                )
+            else:
+                inp = tr.input
+            _process(inp, batch_idxs, "in")
         if tout:
             _process(tr.output, batch_idxs, "out")
 

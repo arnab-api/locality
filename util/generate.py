@@ -74,6 +74,34 @@ def generate_interactive(
         print()
 
 
+@torch.inference_mode()
+def generate_one_by_one(
+    model, tok, prompts, n_gen_per_prompt=1, top_k=1, max_out_len=100
+):
+    txt = []
+    for prompt in prompts:
+        inp_tok = tok(prompt, padding=True, return_tensors="pt").to(
+            next(model.parameters()).device
+        )
+        input_ids, attention_mask = inp_tok["input_ids"], inp_tok["attention_mask"]
+        output_ids = model.generate(
+            input_ids=input_ids.repeat(n_gen_per_prompt, 1),
+            attention_mask=attention_mask.repeat(n_gen_per_prompt, 1),
+            do_sample=True,
+            top_k=top_k,
+            max_length=max_out_len,
+            pad_token_id=tok.eos_token_id,
+        )
+        txt.extend([tok.decode(out, skip_special_tokens=True) for out in output_ids])
+    txt = [
+        unicodedata.normalize("NFKD", x)
+        .replace("\n\n", " ")
+        .replace("<|endoftext|>", "")
+        for x in txt
+    ]
+    return txt
+
+
 def generate_fast(
     model: AutoModelForCausalLM,
     tok: AutoTokenizer,
@@ -87,6 +115,12 @@ def generate_fast(
     Our custom implementation.
     """
 
+    # ! Does not work for Mistral, weird attention error. Need to debug.
+    if "mistral" in model.config._name_or_path.lower():
+        return generate_one_by_one(
+            model, tok, prompts, n_gen_per_prompt, top_k, max_out_len
+        )
+
     # Unroll prompts and tokenize
     inp = [prompt for prompt in prompts for _ in range(n_gen_per_prompt)]
     inp_tok = tok(inp, padding=True, return_tensors="pt").to(
@@ -94,6 +128,8 @@ def generate_fast(
     )
     input_ids, attention_mask = inp_tok["input_ids"], inp_tok["attention_mask"]
     batch_size = input_ids.size(0)
+
+    # print(attention_mask)
 
     # Setup storage of fast generation with attention caches.
     # `cur_context` is used to define the range of inputs that are not yet
