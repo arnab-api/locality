@@ -116,7 +116,10 @@ def generate_fast(
     """
 
     # ! Does not work for Mistral, weird attention error. Need to debug.
-    if "mistral" in model.config._name_or_path.lower():
+    if (
+        "mistral" in model.config._name_or_path.lower()
+        or "llama" in model.config._name_or_path.lower()
+    ):
         return generate_one_by_one(
             model, tok, prompts, n_gen_per_prompt, top_k, max_out_len
         )

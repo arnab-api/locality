@@ -10,6 +10,18 @@ from util import nethook
 from .memit_hparams import MEMITHyperParams
 
 
+def remove_bos_prefixes(
+    token_ids: torch.Tensor,
+    bos_token_id: int,
+):
+    """
+    Removes the first token from a sequence if it is the BOS token.
+    """
+    while token_ids[0] == bos_token_id:
+        token_ids = token_ids[1:]
+    return token_ids
+
+
 def compute_z(
     model: AutoModelForCausalLM,
     tok: AutoTokenizer,
@@ -39,14 +51,18 @@ def compute_z(
     target_ids = tok(request["target_new"]["str"], return_tensors="pt").to("cuda")[
         "input_ids"
     ][0]
+    target_ids = remove_bos_prefixes(target_ids, tok.bos_token_id)
 
     # Compile list of rewriting and KL x/y pairs
     rewriting_prompts, kl_prompts = [
-        context.format(request["prompt"]) + tok.decode(target_ids[:-1])
+        context.format(request["prompt"])  #! + tok.decode(target_ids[:-1])
         for context_types in context_templates
         for context in context_types
     ], ["{} is a"]
     all_prompts = rewriting_prompts + kl_prompts
+
+    print(f"target_ids => '{tok.decode(target_ids)}'")
+    # print(all_prompts)
 
     input_tok = tok(
         [prompt.format(request["subject"]) for prompt in all_prompts],
@@ -239,27 +255,127 @@ def find_fact_lookup_idx(
     """
     Computes hypothesized fact lookup index given a sentence and subject.
     """
+    # print(f"{prompt=}")
+    # print(f"{subject=}")
 
-    ret = None
-    if fact_token_strategy == "last":
-        ret = -1
-    elif (
-        "subject_" in fact_token_strategy and fact_token_strategy.index("subject_") == 0
-    ):
-        ret = repr_tools.get_words_idxs_in_templates(
-            tok=tok,
-            context_templates=[prompt],
-            words=[subject],
-            subtoken=fact_token_strategy[len("subject_") :],
-        )[0][0]
+    if "llama" in type(tok).__name__.lower() or "mistral" in type(tok).__name__.lower():
+        subject_start, subject_end = find_token_range(
+            string=prompt.format(subject),
+            substring=subject,
+            tokenizer=tok,
+        )
+        ret = subject_end - 1
+
     else:
-        raise ValueError(f"fact_token={fact_token_strategy} not recognized")
+        ret = None
+        if fact_token_strategy == "last":
+            ret = -1
+        elif (
+            "subject_" in fact_token_strategy
+            and fact_token_strategy.index("subject_") == 0
+        ):
+            ret = repr_tools.get_words_idxs_in_templates(
+                tok=tok,
+                context_templates=[prompt],
+                words=[subject],
+                subtoken=fact_token_strategy[len("subject_") :],
+            )[0][0]
+        else:
+            raise ValueError(f"fact_token={fact_token_strategy} not recognized")
 
     sentence = prompt.format(subject)
     if verbose:
         print(
-            f"Lookup index found: {ret} | Sentence: {sentence} | Token:",
-            tok.decode(tok(sentence)["input_ids"][ret]),
+            f"Lookup index found: {ret} | Sentence: '{sentence}' | Token: \"{tok.decode(tok(sentence)['input_ids'][ret])}\"",
         )
 
     return ret
+
+
+from typing import Any, Optional
+
+
+def find_token_range(
+    string: str,
+    substring: str,
+    tokenizer=None,
+    occurrence: int = 0,
+    offset_mapping=None,
+    **kwargs: Any,
+) -> tuple[int, int]:
+    """Find index range of tokenized string containing tokens for substring.
+
+    The kwargs are forwarded to the tokenizer.
+
+    A simple example:
+
+        string = 'The batman is the night.'
+        substring = 'batman'
+        tokenizer = ...
+
+        # Example tokenization: ['the', 'bat', '##man', 'is', 'the', 'night']
+        assert find_token_range(string, substring, tokenizer) == (1, 3)
+
+    Args:
+        string: The string.
+        substring: The substring to find token range for.
+        tokenizer: The tokenizer. If not set, offset_mapping must be.
+        occurrence: The occurence of the substring to look for.
+            Zero indexed. Defaults to 0, the first occurrence.
+        offset_mapping: Precomputed offset mapping. If not set, tokenizer will be run.
+
+    Raises:
+        ValueError: If substring is not actually in string or if banned
+            kwargs are specified.
+
+    Returns:
+        Tuple[int, int]: The start (inclusive) and end (exclusive) token idx.
+    """
+    if tokenizer is None and offset_mapping is None:
+        raise ValueError("must set either tokenizer= or offset_mapping=")
+    if "return_offsets_mapping" in kwargs:
+        raise ValueError("cannot set return_offsets_mapping")
+    if substring not in string:
+        raise ValueError(f'"{substring}" not found in "{string}"')
+    if occurrence < 0:
+        # If occurrence is negative, count from the right.
+        char_start = string.rindex(substring)
+        for _ in range(-1 - occurrence):
+            try:
+                char_start = string.rindex(substring, 0, char_start)
+            except ValueError as error:
+                raise ValueError(
+                    f"could not find {-occurrence} occurrences "
+                    f'of "{substring} in "{string}"'
+                ) from error
+    else:
+        char_start = string.index(substring)
+        for _ in range(occurrence):
+            try:
+                char_start = string.index(substring, char_start + 1)
+            except ValueError as error:
+                raise ValueError(
+                    f"could not find {occurrence + 1} occurrences "
+                    f'of "{substring} in "{string}"'
+                ) from error
+    char_end = char_start + len(substring)
+
+    if offset_mapping is None:
+        assert tokenizer is not None
+        tokens = tokenizer(string, return_offsets_mapping=True, **kwargs)
+        offset_mapping = tokens.offset_mapping
+
+    token_start, token_end = None, None
+    for index, (token_char_start, token_char_end) in enumerate(offset_mapping):
+        if token_start is None:
+            if token_char_start <= char_start and token_char_end >= char_start:
+                token_start = index
+        if token_end is None:
+            if token_char_start <= char_end and token_char_end >= char_end:
+                token_end = index
+                break
+
+    assert token_start is not None
+    assert token_end is not None
+    assert token_start <= token_end
+    return (token_start, token_end + 1)
