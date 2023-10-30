@@ -9,6 +9,7 @@ from typing import List
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
+from memit.extra_utils import find_token_range
 from util import nethook
 
 
@@ -27,7 +28,6 @@ def get_reprs_at_word_tokens(
     when `word` is substituted into `context_template`. See `get_last_word_idx_in_template`
     for more details.
     """
-
     idxs = get_words_idxs_in_templates(tok, context_templates, words, subtoken)
     return get_reprs_at_idxs(
         model,
@@ -42,7 +42,7 @@ def get_reprs_at_word_tokens(
 
 def get_words_idxs_in_templates(
     tok: AutoTokenizer, context_templates: str, words: str, subtoken: str
-) -> int:
+):
     """
     Given list of template strings, each with *one* format specifier
     (e.g. "{} plays basketball"), and words to be substituted into the
@@ -52,6 +52,31 @@ def get_words_idxs_in_templates(
     assert all(
         tmp.count("{}") == 1 for tmp in context_templates
     ), "We currently do not support multiple fill-ins for context"
+
+    if "llama" in type(tok).__name__.lower() or "mistral" in type(tok).__name__.lower():
+        idxs = []
+        tokenized_contexts = tok(
+            [context_templates[i].format(words[i]) for i in range(len(words))],
+            padding=True,
+            return_tensors="pt",
+            return_offsets_mapping=True,
+        )
+        offset_mappings = tokenized_contexts.pop("offset_mapping")
+        for template, subject, offset_maps in zip(
+            context_templates, words, offset_mappings
+        ):
+            subject_start, subject_end = find_token_range(
+                string=template.format(subject),
+                substring=subject,
+                tokenizer=tok,
+                offset_mapping=offset_maps,
+            )
+            idxs.append([subject_end - 1])
+
+        print(
+            f"{[(idx, tok.decode(tokenized[idx])) for idx, tokenized in zip(idxs, tokenized_contexts['input_ids'])]}"
+        )
+        return idxs
 
     # Compute prefixes and suffixes of the tokenized context
     fill_idxs = [tmp.index("{}") for tmp in context_templates]
@@ -135,6 +160,11 @@ def get_reprs_at_idxs(
     for batch_contexts, batch_idxs in _batch(n=128):
         contexts_tok = tok(batch_contexts, padding=True, return_tensors="pt").to(
             next(model.parameters()).device
+        )
+        # print(f"{contexts_tok=}")
+        # print(f"{batch_idxs=}")
+        print(
+            f"==> {[(idx, tok.decode(tokenized[idx[0]])) for idx, tokenized in zip(batch_idxs, contexts_tok['input_ids'])]}"
         )
 
         with torch.no_grad():

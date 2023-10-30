@@ -213,6 +213,12 @@ def get_module_input_output_at_words(
     output of a particular layer module.
     """
 
+    print(f"{layer=}")
+    print(f"{context_templates=}")
+    print(f"{words=}")
+    print(f"{module_template=}")
+    print(f"{fact_token_strategy=}")
+
     word_repr_args = dict(
         model=model,
         tok=tok,
@@ -242,7 +248,11 @@ def get_module_input_output_at_words(
     else:
         raise ValueError(f"fact_token={fact_token_strategy} not recognized")
 
+    print(l_input.shape, l_output.shape)
     return l_input.detach(), l_output.detach()
+
+
+from memit.extra_utils import find_token_range
 
 
 def find_fact_lookup_idx(
@@ -257,31 +267,20 @@ def find_fact_lookup_idx(
     """
     # print(f"{prompt=}")
     # print(f"{subject=}")
-
-    if "llama" in type(tok).__name__.lower() or "mistral" in type(tok).__name__.lower():
-        subject_start, subject_end = find_token_range(
-            string=prompt.format(subject),
-            substring=subject,
-            tokenizer=tok,
-        )
-        ret = subject_end - 1
-
+    ret = None
+    if fact_token_strategy == "last":
+        ret = -1
+    elif (
+        "subject_" in fact_token_strategy and fact_token_strategy.index("subject_") == 0
+    ):
+        ret = repr_tools.get_words_idxs_in_templates(
+            tok=tok,
+            context_templates=[prompt],
+            words=[subject],
+            subtoken=fact_token_strategy[len("subject_") :],
+        )[0][0]
     else:
-        ret = None
-        if fact_token_strategy == "last":
-            ret = -1
-        elif (
-            "subject_" in fact_token_strategy
-            and fact_token_strategy.index("subject_") == 0
-        ):
-            ret = repr_tools.get_words_idxs_in_templates(
-                tok=tok,
-                context_templates=[prompt],
-                words=[subject],
-                subtoken=fact_token_strategy[len("subject_") :],
-            )[0][0]
-        else:
-            raise ValueError(f"fact_token={fact_token_strategy} not recognized")
+        raise ValueError(f"fact_token={fact_token_strategy} not recognized")
 
     sentence = prompt.format(subject)
     if verbose:
@@ -290,92 +289,3 @@ def find_fact_lookup_idx(
         )
 
     return ret
-
-
-from typing import Any, Optional
-
-
-def find_token_range(
-    string: str,
-    substring: str,
-    tokenizer=None,
-    occurrence: int = 0,
-    offset_mapping=None,
-    **kwargs: Any,
-) -> tuple[int, int]:
-    """Find index range of tokenized string containing tokens for substring.
-
-    The kwargs are forwarded to the tokenizer.
-
-    A simple example:
-
-        string = 'The batman is the night.'
-        substring = 'batman'
-        tokenizer = ...
-
-        # Example tokenization: ['the', 'bat', '##man', 'is', 'the', 'night']
-        assert find_token_range(string, substring, tokenizer) == (1, 3)
-
-    Args:
-        string: The string.
-        substring: The substring to find token range for.
-        tokenizer: The tokenizer. If not set, offset_mapping must be.
-        occurrence: The occurence of the substring to look for.
-            Zero indexed. Defaults to 0, the first occurrence.
-        offset_mapping: Precomputed offset mapping. If not set, tokenizer will be run.
-
-    Raises:
-        ValueError: If substring is not actually in string or if banned
-            kwargs are specified.
-
-    Returns:
-        Tuple[int, int]: The start (inclusive) and end (exclusive) token idx.
-    """
-    if tokenizer is None and offset_mapping is None:
-        raise ValueError("must set either tokenizer= or offset_mapping=")
-    if "return_offsets_mapping" in kwargs:
-        raise ValueError("cannot set return_offsets_mapping")
-    if substring not in string:
-        raise ValueError(f'"{substring}" not found in "{string}"')
-    if occurrence < 0:
-        # If occurrence is negative, count from the right.
-        char_start = string.rindex(substring)
-        for _ in range(-1 - occurrence):
-            try:
-                char_start = string.rindex(substring, 0, char_start)
-            except ValueError as error:
-                raise ValueError(
-                    f"could not find {-occurrence} occurrences "
-                    f'of "{substring} in "{string}"'
-                ) from error
-    else:
-        char_start = string.index(substring)
-        for _ in range(occurrence):
-            try:
-                char_start = string.index(substring, char_start + 1)
-            except ValueError as error:
-                raise ValueError(
-                    f"could not find {occurrence + 1} occurrences "
-                    f'of "{substring} in "{string}"'
-                ) from error
-    char_end = char_start + len(substring)
-
-    if offset_mapping is None:
-        assert tokenizer is not None
-        tokens = tokenizer(string, return_offsets_mapping=True, **kwargs)
-        offset_mapping = tokens.offset_mapping
-
-    token_start, token_end = None, None
-    for index, (token_char_start, token_char_end) in enumerate(offset_mapping):
-        if token_start is None:
-            if token_char_start <= char_start and token_char_end >= char_start:
-                token_start = index
-        if token_end is None:
-            if token_char_start <= char_end and token_char_end >= char_end:
-                token_end = index
-                break
-
-    assert token_start is not None
-    assert token_end is not None
-    assert token_start <= token_end
-    return (token_start, token_end + 1)
