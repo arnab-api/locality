@@ -11,9 +11,8 @@ class ModelandTokenizer:
         self,
         model: Optional[transformers.AutoModel] = None,
         tokenizer: Optional[transformers.AutoTokenizer] = None,
-        model_path: Optional[
-            str
-        ] = "EleutherAI/gpt-j-6B",  # if model is provided, this will be ignored and rewritten
+        model_path: Optional[str] = "EleutherAI/gpt-j-6B",
+        fp16: bool = True,
     ) -> None:
         assert (
             model is not None or model_path is not None
@@ -26,7 +25,7 @@ class ModelandTokenizer:
                 AutoModelForCausalLM.from_pretrained(
                     model_path,
                     low_cpu_mem_usage=True,
-                    torch_dtype=torch.float16,
+                    torch_dtype=torch.float16 if fp16 else torch.float32,
                 ).to("cuda"),
                 AutoTokenizer.from_pretrained(
                     model_path,

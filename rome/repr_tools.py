@@ -9,7 +9,7 @@ from typing import List
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from memit.extra_utils import find_token_range
+from locality.functional import find_token_range
 from util import nethook
 
 

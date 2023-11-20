@@ -252,7 +252,7 @@ def get_module_input_output_at_words(
     return l_input.detach(), l_output.detach()
 
 
-from memit.extra_utils import find_token_range
+from locality.functional import find_token_range
 
 
 def find_fact_lookup_idx(
