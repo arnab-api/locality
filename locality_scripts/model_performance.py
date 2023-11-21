@@ -118,6 +118,9 @@ def measure_model_performance(
             num_options=num_options,
             num_icl=num_icl,
         )
+        logger.debug("-" * 50)
+        logger.info(f"Recall: {trial.recall}")
+        logger.debug("-" * 50)
 
         experiment_results.trial_results.append(trial)
         experiment_utils.save_results_file(
@@ -187,6 +190,9 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
+    logging_utils.configure(args)
+    experiment_utils.setup_experiment(args)
+
     logger.info(args)
 
     measure_model_performance(
