@@ -1,8 +1,16 @@
-from typing import Any, Optional
+import logging
+from dataclasses import dataclass
+from typing import Any, Optional, Union
 
 import names
 import numpy as np
 import torch
+from dataclasses_json import DataClassJsonMixin
+
+import locality.utils.tokenizer_utils as tokenizer_utils
+from locality.models import ModelandTokenizer
+
+logger = logging.getLogger(__name__)
 
 
 def find_token_range(
@@ -94,35 +102,121 @@ def find_token_range(
     return (token_start, token_end + 1)
 
 
+from locality.utils.dataclasses import PredictedToken
+
+
 @torch.inference_mode()
-def predict_next_token(model, tokenizer, prompt, k=5, batch_size=2):
+def predict_next_token(
+    mt: ModelandTokenizer,
+    prompt: Union[str, list[str]],
+    k: int = 5,
+    batch_size: int = 8,
+) -> list[list[PredictedToken]]:
     """Compute the next token."""
     if isinstance(prompt, str):
         prompt = [prompt]
-    inputs = tokenizer(prompt, return_tensors="pt", padding="longest").to(model.device)
+
+    with tokenizer_utils.set_padding_side(mt.tokenizer, padding_side="left"):
+        inputs = mt.tokenizer(prompt, return_tensors="pt", padding="longest").to(
+            mt.model.device
+        )
     with torch.inference_mode():
-        batched_logits = []
+        predictions = []
         for i in range(0, len(inputs.input_ids), batch_size):
-            batch_outputs = model(
+            batch_outputs = mt.model(
                 input_ids=inputs.input_ids[i : i + batch_size],
                 attention_mask=inputs.attention_mask[i : i + batch_size],
             )
-            batched_logits.append(batch_outputs.logits)
 
-            if "cuda" in str(model.device):
-                torch.cuda.empty_cache()
+            next_token_probs = batch_outputs.logits[:, -1].float().softmax(dim=-1)
+            next_token_topk = next_token_probs.topk(dim=-1, k=k)
 
-        logits = torch.cat(batched_logits, dim=0)
+            for token_ids, token_probs in zip(
+                next_token_topk.indices, next_token_topk.values
+            ):
+                predictions.append(
+                    [
+                        PredictedToken(
+                            token=mt.tokenizer.decode(token_id),
+                            token_id=token_id.item(),
+                            prob=prob.item(),
+                        )
+                        for token_id, prob in zip(token_ids, token_probs)
+                    ]
+                )
+    return predictions
 
-    next_token_probs = logits[:, -1].float().softmax(dim=-1)
-    next_token_topk = next_token_probs.topk(dim=-1, k=k)
 
-    predictions = []
-    for token_ids, token_probs in zip(next_token_topk.indices, next_token_topk.values):
-        predictions.append(
+def any_is_nontrivial_prefix(predictions: list[str], target: str) -> bool:
+    """Return true if any prediction is (case insensitive) prefix of the target."""
+    return any(is_nontrivial_prefix(p, target) for p in predictions)
+
+
+def is_nontrivial_prefix(prediction: str, target: str) -> bool:
+    """Return true if prediction is (case insensitive) prefix of the target."""
+    target = target.lower().strip()
+    prediction = prediction.lower().strip()
+    return len(prediction) > 0 and target.startswith(prediction)
+
+
+def get_tick_marker(value: bool) -> str:
+    """Returns a tick or cross marker depending on the value."""
+    return "✓" if value else "✗"
+
+
+def make_icl_prompt(
+    icl_examples: list, prompt_template: str, bos_token: str = "", subject: str = {}
+):
+    assert prompt_template.count("{}") == 1
+    prompt = (
+        bos_token
+        + " "
+        + "\n".join(
             [
-                (tokenizer.decode(token_id), prob.item(), token_id.item())
-                for token_id, prob in zip(token_ids, token_probs)
+                prompt_template.format(example[0]) + f" {example[1]}"
+                for example in icl_examples
             ]
         )
-    return predictions
+    )
+    prompt += "\n" + prompt_template.format(subject)
+    return prompt
+
+
+def filter_samples_by_model_knowledge(
+    mt: ModelandTokenizer,
+    subj_obj_mapping: list[tuple[str, str]],
+    prompt_template=" {} is located in the country of",
+    icl_examples: Optional[list[tuple[str, str]]] = None,
+) -> list[tuple[str, str]]:
+    if icl_examples is not None:
+        prompt_template = make_icl_prompt(
+            icl_examples,
+            prompt_template,
+            bos_token=mt.tokenizer.bos_token,
+            subject="{}",
+        )
+        subj_obj_mapping = list(set(subj_obj_mapping) - set(icl_examples))
+    logger.debug(f"filtering with prompt `{prompt_template}`")
+    prompts = [prompt_template.format(subj) for subj, _ in subj_obj_mapping]
+
+    # predictions = predict_next_token(
+    #     mt,
+    #     prompts,
+    #     k=5,
+    # )
+
+    predictions = [predict_next_token(mt, prompt, k=5)[0] for prompt in prompts]
+
+    filtered_samples = []
+    for sample, prediction in zip(subj_obj_mapping, predictions):
+        answer = sample[1]
+        top_pred = prediction[0]
+        is_known = is_nontrivial_prefix(prediction=top_pred.token, target=answer)
+        if is_known:
+            filtered_samples.append(sample)
+
+        logger.debug(
+            f"{sample[0]} -> {answer=} | predicted = '{top_pred.token}'({top_pred.prob}) ==> ({get_tick_marker(is_known)})"
+        )
+
+    return filtered_samples
