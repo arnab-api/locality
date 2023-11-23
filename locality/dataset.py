@@ -8,26 +8,27 @@ from dataclasses_json import DataClassJsonMixin
 from torch.utils.data import Dataset
 
 import locality.utils.dataset_utils as dset_utils
-from dsets.counterfact import CounterFactDataset
 
 DEFAULT_PATH = "data/counterfact"
 
 
 @dataclass(frozen=True)
-class qa_samples(DataClassJsonMixin):
+class QA_Sample(DataClassJsonMixin):
     query: str
+    subject: str
+    variable: str
     answer: str
 
 
 @dataclass()
 class VariableBindingFactRecallDataset(DataClassJsonMixin, Dataset):
     few_shot_examples: str
-    qa_samples: list[qa_samples]
+    qa_samples: list[QA_Sample]
 
     def __init__(
         self,
         few_shot_examples: str,
-        qa_samples: list[qa_samples],
+        qa_samples: list[QA_Sample],
     ) -> None:
         super().__init__()
         self.few_shot_examples = few_shot_examples
@@ -53,7 +54,14 @@ def generate_synthetic_dataset(
     num_icl: int = 5,  # number of few-shot examples to contextualize
     batch_size: int = 100,
 ) -> VariableBindingFactRecallDataset:
-    icl_examples, _, used_variables, used_subjects = dset_utils.get_demonstrations(
+    (
+        icl_examples,
+        _,
+        _,
+        _,
+        used_variables,
+        used_subjects,
+    ) = dset_utils.get_demonstrations(
         relation_subj_obj_mapping,
         num_options,
         num_icl,
@@ -69,10 +77,17 @@ def generate_synthetic_dataset(
     )
     last_query = query_template[:obj_placeholder_idx].rstrip()
 
-    qa_pairs: list[qa_samples] = []
+    qa_pairs: list[QA_Sample] = []
 
     while len(qa_pairs) < batch_size:
-        current_query, answer, _, _ = dset_utils.get_demonstrations(
+        (
+            cur_query,
+            cur_answer,
+            cur_subject,
+            cur_variable,
+            _,
+            _,
+        ) = dset_utils.get_demonstrations(
             subj_obj_mapping=relation_subj_obj_mapping,
             num_options=num_options,
             num_icl=1,
@@ -81,7 +96,14 @@ def generate_synthetic_dataset(
             used_variables=used_variables,
             used_subjects=used_subjects,
         )
-        qa_pairs.append(qa_samples(query=current_query[0], answer=answer[0]))
+        qa_pairs.append(
+            QA_Sample(
+                query=cur_query[0],
+                subject=cur_subject[0],
+                variable=cur_variable[0],
+                answer=cur_answer[0],
+            )
+        )
 
     return VariableBindingFactRecallDataset(
         few_shot_examples=icl_examples, qa_samples=qa_pairs

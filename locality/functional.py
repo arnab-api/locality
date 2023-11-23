@@ -1,7 +1,8 @@
 import logging
 from dataclasses import dataclass
-from typing import Any, Optional, Union
+from typing import Any, Callable, Optional, Union
 
+import baukit
 import names
 import numpy as np
 import torch
@@ -111,15 +112,27 @@ def predict_next_token(
     prompt: Union[str, list[str]],
     k: int = 5,
     batch_size: int = 8,
-) -> list[list[PredictedToken]]:
+    token_of_interest: Optional[Union[Union[str, int], list[Union[str, int]]]] = None,
+) -> Union[
+    list[list[PredictedToken]],
+    tuple[list[list[PredictedToken]], list[tuple[int, PredictedToken]]],
+]:
+    # ! Do not use batch decoding for LLaMA-2 models. Not working perfectly.
     """Compute the next token."""
     if isinstance(prompt, str):
         prompt = [prompt]
+        if token_of_interest is not None:
+            token_of_interest = [token_of_interest]
+
+    if token_of_interest is not None:
+        assert len(token_of_interest) == len(prompt)
+        track_interesting_tokens = []
 
     with tokenizer_utils.set_padding_side(mt.tokenizer, padding_side="left"):
         inputs = mt.tokenizer(prompt, return_tensors="pt", padding="longest").to(
             mt.model.device
         )
+
     with torch.inference_mode():
         predictions = []
         for i in range(0, len(inputs.input_ids), batch_size):
@@ -144,6 +157,31 @@ def predict_next_token(
                         for token_id, prob in zip(token_ids, token_probs)
                     ]
                 )
+            if token_of_interest is not None:
+                for j in range(i, i + batch_outputs.logits.shape[0]):
+                    tok_id = (
+                        mt.tokenizer(token_of_interest[j]).input_ids[1]
+                        if type(token_of_interest[j]) == str
+                        else token_of_interest[j]
+                    )
+                    probs = next_token_probs[j - i]
+                    order = probs.topk(dim=-1, k=probs.shape[-1]).indices.squeeze()
+                    prob_tok = probs[tok_id]
+                    rank = int(torch.where(order == tok_id)[0].item() + 1)
+                    track_interesting_tokens.append(
+                        (
+                            rank,
+                            PredictedToken(
+                                token=mt.tokenizer.decode(tok_id),
+                                token_id=tok_id.item()
+                                if isinstance(tok_id, torch.Tensor)
+                                else tok_id,
+                                prob=prob_tok.item(),
+                            ),
+                        )
+                    )
+    if token_of_interest is not None:
+        return predictions, track_interesting_tokens
     return predictions
 
 
@@ -199,12 +237,6 @@ def filter_samples_by_model_knowledge(
     logger.debug(f"filtering with prompt `{prompt_template}`")
     prompts = [prompt_template.format(subj) for subj, _ in subj_obj_mapping]
 
-    # predictions = predict_next_token(
-    #     mt,
-    #     prompts,
-    #     k=5,
-    # )
-
     predictions = [predict_next_token(mt, prompt, k=5)[0] for prompt in prompts]
 
     filtered_samples = []
@@ -220,3 +252,46 @@ def filter_samples_by_model_knowledge(
         )
 
     return filtered_samples
+
+
+def untuple(x):
+    if isinstance(x, tuple):
+        return x[0]
+    return x
+
+
+def patch_output(
+    patch_layer: str, patch_idx: int, patching_vector: torch.Tensor
+) -> Callable:
+    def edit_output(layer, output):
+        if layer != patch_layer:
+            return output
+        untuple(output)[:, patch_idx] = patching_vector
+        return output
+
+    return edit_output
+
+
+@torch.inference_mode()
+def get_h(
+    mt: ModelandTokenizer,
+    prompt: str,
+    subject: str,
+    layers: list[str],
+) -> dict[str, torch.Tensor]:
+    tokenized = mt.tokenizer(
+        prompt, return_offsets_mapping=True, return_tensors="pt"
+    ).to(mt.model.device)
+    offset_mapping = tokenized.pop("offset_mapping")[0]
+
+    subject_start, subject_end = find_token_range(
+        prompt, subject, tokenizer=mt.tokenizer, offset_mapping=offset_mapping
+    )
+    with baukit.TraceDict(module=mt.model, layers=layers) as traces:
+        mt.model(**tokenized)
+
+    h = {
+        layer: untuple(traces[layer].output)[:, subject_end - 1].squeeze()
+        for layer in layers
+    }
+    return h

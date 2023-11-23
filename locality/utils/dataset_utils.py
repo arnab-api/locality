@@ -24,6 +24,8 @@ def get_demonstrations(
     # print(f"{used_subjects=}")
     demonstrations = []
     answers = []
+    subjects_of_interest = []
+    variables_of_interest = []
     while len(demonstrations) < num_icl:
         cur_options = [
             (
@@ -65,8 +67,17 @@ def get_demonstrations(
         demonstrations.append(example)
 
         answers.append(cur_options[query_idx][1])
+        subjects_of_interest.append(cur_options[query_idx][0])
+        variables_of_interest.append(cur_variables[query_idx])
 
     used_subjects = list(set(used_subjects))
     used_variables = list(set(used_variables))
 
-    return demonstrations, answers, used_variables, used_subjects
+    return (
+        demonstrations,
+        answers,
+        subjects_of_interest,
+        variables_of_interest,
+        used_subjects,
+        used_variables,
+    )

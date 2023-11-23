@@ -93,7 +93,7 @@ def measure_model_performance(
             d["requested_rewrite"]["target_true"]["str"],
         )
         for d in relation_filter
-    ][:100]
+    ]
 
     experiment_results = ExperimentResults(
         experiment_specific_args=dict(
@@ -117,6 +117,7 @@ def measure_model_performance(
             query_template=query_template,
             num_options=num_options,
             num_icl=num_icl,
+            dataset_size=dataset_size,
         )
         logger.debug("-" * 50)
         logger.info(f"Recall: {trial.recall}")

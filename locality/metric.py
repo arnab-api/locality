@@ -1,4 +1,6 @@
-from typing import Any, Optional
+from typing import Any
+
+import numpy as np
 
 import locality.functional as functional
 
@@ -38,3 +40,17 @@ def _validate_same_length(**kwargs: list[Any]) -> None:
         message = f"inconsistent batch sizes:" + "\n\t"
         message += "\n\t".join(f"{key}={length}" for key, length in lengths.items())
         raise ValueError(message)
+
+
+def reciprocal_rank(ranks: list[int]) -> float:
+    """Compute the reciprocal rank of the first correct prediction.
+
+    Args:
+        ranks: List of ranks of the first correct prediction. Must be the same length as `predictions`.
+
+    Returns:
+        Reciprocal rank.
+
+    """
+    ranks = np.array(ranks).astype(float)
+    return sum(1 / rank for rank in ranks) / len(ranks)
