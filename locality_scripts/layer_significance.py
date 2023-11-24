@@ -33,16 +33,16 @@ from locality.utils.dataclasses import (
 logger = logging.getLogger(__name__)
 
 
-def get_edit_target(dataset: VariableBindingFactRecallDataset) -> dict[str, QA_Sample]:
+def get_edit_target(qa_samples: list[QA_Sample]) -> dict[str, QA_Sample]:
     """Given a list of (subject, object) pairs, return a mapping from each pair to a
     different pair that differs in only one element.
     """
     edit_target = {}
-    for idx in range(dataset.qa_samples):
+    for idx in range(len(qa_samples)):
         jdx = idx
-        while dataset.qa_samples[idx].subject == dataset.qa_samples[jdx].subject:
-            jdx = np.random.choice(len(dataset))
-        edit_target[dataset.qa_samples[idx].subject] = dataset.qa_samples[jdx]
+        while qa_samples[idx].subject == qa_samples[jdx].subject:
+            jdx = np.random.choice(len(qa_samples))
+        edit_target[qa_samples[idx].subject] = qa_samples[jdx]
     return edit_target
 
 
@@ -74,6 +74,12 @@ def patch_individual_layers_for_single_edit(
     subj_last_idx = subject_end - 1
     edit_rank_after_patching: dict[int, tuple[int, PredictedToken]] = {}
     predictions: dict[int, list[PredictedToken]] = {}
+    edit_token = mt.tokenizer.decode(tokenized["input_ids"][0][subj_last_idx])
+
+    logger.debug("=" * 100)
+    logger.debug(
+        f"({source_QA.subject}, {source_QA.answer}) => ({edit_QA.subject}, {edit_QA.answer}) | edit_idx={subj_last_idx}[{edit_token}]"
+    )
 
     for layer_idx in layers:
         layer_name = mt.layer_name_format.format(layer_idx)
@@ -83,17 +89,18 @@ def patch_individual_layers_for_single_edit(
             edit_output=patch_output(
                 patch_layer=layer_name,
                 patch_idx=subj_last_idx,
-                patch_value=edit_h[layer_name],
+                patching_vector=edit_h[layer_name],
             ),
         ):
             preds, edit_answer_rank = predict_next_token(
                 mt=mt, prompt=query, token_of_interest=edit_QA.answer
             )
-        predictions[layer_idx] = preds
-        edit_rank_after_patching[layer_idx] = edit_answer_rank
+        predictions[layer_idx] = preds[0]
+        edit_rank_after_patching[layer_idx] = edit_answer_rank[0]
         logger.debug(
-            f"Layer {layer_idx} => rank({edit_QA.answer})={edit_answer_rank} | {preds=}"
+            f"Layer {layer_idx} => rank({edit_QA.answer})={edit_answer_rank[0][0]} [{edit_answer_rank[0][1]}]  | preds={', '.join(str(p) for p in preds[0])}"
         )
+    logger.debug("-" * 100)
 
     return PatchingResults_for_one_pair(
         source_QA=source_QA,
@@ -101,7 +108,7 @@ def patch_individual_layers_for_single_edit(
         edit_index=subj_last_idx,
         edit_token=mt.tokenizer.decode(tokenized["input_ids"][0][subj_last_idx]),
         predictions_after_patching=predictions,
-        rank_edit_ans_after_patching=edit_answer_rank,
+        rank_edit_ans_after_patching=edit_rank_after_patching,
     )
 
 
@@ -114,14 +121,16 @@ def measure_patching_effect_on_each_layer(
     lawerwise_predictions_after_patching: dict[int, list[list[str]]] = {
         layer_idx: [] for layer_idx in layers
     }
-    layerwise_edit_answer_rank_after_patching: dict[int, list[int]]
+    layerwise_edit_answer_rank_after_patching: dict[int, list[int]] = {
+        layer_idx: [] for layer_idx in layers
+    }
     target_answers: list[str] = []
 
     track_edit_results = []
-    for idx in range(len(dataset)):
+    for idx in tqdm(range(len(dataset))):
         source_QA = dataset.qa_samples[idx]
         edit_QA = edit_target[source_QA.subject]
-        query = dataset.qa_samples[idx].query
+        query = dataset[idx][0]
         edit_result = patch_individual_layers_for_single_edit(
             mt=mt,
             layers=layers,
@@ -140,10 +149,10 @@ def measure_patching_effect_on_each_layer(
                 ]
             )
             layerwise_edit_answer_rank_after_patching[layer_idx].append(
-                edit_result.rank_edit_ans_after_patching[0]
+                edit_result.rank_edit_ans_after_patching[layer_idx]
             )
 
-    logger.info("-" * 50)
+    logger.info("=" * 100)
     patching_effect: list[LayerPatchingEfficacy] = []
     for layer_idx in layers:
         layer_recall = metric.recall(
@@ -151,7 +160,7 @@ def measure_patching_effect_on_each_layer(
             targets=target_answers,
         )
         reciprocal_rank = metric.reciprocal_rank(
-            layerwise_edit_answer_rank_after_patching[layer_idx]
+            [rank[0] for rank in layerwise_edit_answer_rank_after_patching[layer_idx]]
         )
         logger.info(f"Layer {layer_idx} => {layer_recall=}, {reciprocal_rank=}")
         patching_effect.append(
@@ -161,7 +170,7 @@ def measure_patching_effect_on_each_layer(
                 reciprocal_rank=reciprocal_rank,
             )
         )
-    logger.info("-" * 50)
+    logger.info("=" * 100)
     return patching_effect, track_edit_results
 
 
@@ -187,6 +196,7 @@ def run_trial(
         prompt_template=filter_prompt_template,
         icl_examples=icl_examples,
     )
+    logger.info(f"Filtered to {len(filtered_subj_obj_mapping)} samples")
 
     # generate synthetic dataset
     dataset = generate_synthetic_dataset(
@@ -218,7 +228,7 @@ def layer_significance_experiment(
     layers: list[int] = list(range(32)),
     num_trials=10,
     counterfact_relation_id="P17",
-    dataset_size=100,
+    dataset_size=500,
     num_options=3,
     num_icl=5,
     variable_binding_template=" {} is visiting {}",
@@ -273,7 +283,7 @@ def layer_significance_experiment(
         experiment_results.trial_results.append(trial)
         experiment_utils.save_results_file(
             results_dir=results_dir,
-            name=f'{model_path.split("/")[-1]}_{counterfact_relation_id}_performance',
+            name=f'{model_path.split("/")[-1]}_{counterfact_relation_id}_layer_edit_efficacy',
             results=experiment_results,
         )
         logger.info(f"###############################################\n\n")
@@ -288,6 +298,14 @@ if __name__ == "__main__":
         "--model-path",
         type=str,
         default="meta-llama/Llama-2-7b-hf",
+    )
+
+    parser.add_argument(
+        "--layers",
+        type=int,
+        nargs="+",
+        default=list(range(32)),
+        help="layers to patch",
     )
 
     parser.add_argument(
@@ -345,6 +363,7 @@ if __name__ == "__main__":
 
     layer_significance_experiment(
         model_path=args.model_path,
+        layers=args.layers,
         num_trials=args.n_trials,
         counterfact_relation_id=args.relation_id,
         dataset_size=args.dataset_size,

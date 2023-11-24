@@ -15,7 +15,7 @@ class PredictedToken(DataClassJsonMixin):
     prob: float
 
     def __str__(self) -> str:
-        return f"{self.token} (p={self.prob:.3f})"
+        return f'"{self.token}" (p={self.prob:.3f})'
 
 
 @dataclass(frozen=True)

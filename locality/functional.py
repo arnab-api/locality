@@ -237,18 +237,18 @@ def filter_samples_by_model_knowledge(
     logger.debug(f"filtering with prompt `{prompt_template}`")
     prompts = [prompt_template.format(subj) for subj, _ in subj_obj_mapping]
 
-    predictions = [predict_next_token(mt, prompt, k=5)[0] for prompt in prompts]
-
     filtered_samples = []
-    for sample, prediction in zip(subj_obj_mapping, predictions):
-        answer = sample[1]
-        top_pred = prediction[0]
+    for i in range(len(prompts)):
+        predictions = predict_next_token(mt, prompts[i], k=5)[0]
+        subj = subj_obj_mapping[i][0]
+        answer = subj_obj_mapping[i][1]
+        top_pred = predictions[0]
         is_known = is_nontrivial_prefix(prediction=top_pred.token, target=answer)
         if is_known:
-            filtered_samples.append(sample)
+            filtered_samples.append(subj_obj_mapping[i])
 
         logger.debug(
-            f"{sample[0]} -> {answer=} | predicted = '{top_pred.token}'({top_pred.prob}) ==> ({get_tick_marker(is_known)})"
+            f"{subj=} -> {answer=} | predicted = '{top_pred.token}'({top_pred.prob}) ==> ({get_tick_marker(is_known)})"
         )
 
     return filtered_samples
@@ -283,10 +283,17 @@ def get_h(
         prompt, return_offsets_mapping=True, return_tensors="pt"
     ).to(mt.model.device)
     offset_mapping = tokenized.pop("offset_mapping")[0]
+    if "token_type_ids" in tokenized:
+        tokenized.pop("token_type_ids")
 
     subject_start, subject_end = find_token_range(
         prompt, subject, tokenizer=mt.tokenizer, offset_mapping=offset_mapping
     )
+
+    # subj_last_idx = subject_end - 1
+    # print(f"edit_index={subj_last_idx}")
+    # print(f"edit_token={mt.tokenizer.decode(tokenized['input_ids'][0][subj_last_idx])}")
+
     with baukit.TraceDict(module=mt.model, layers=layers) as traces:
         mt.model(**tokenized)
 

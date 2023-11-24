@@ -15,8 +15,8 @@ def get_demonstrations(
     num_icl: int = 5,
     variable_binding_template: str = " {} - {}",  # {variable} - {subject}
     query_template: str = " {} => {}",  # {subject} => {object}.
-    used_variables: Optional[list[str]] = None,
     used_subjects: Optional[list[str]] = None,
+    used_variables: Optional[list[str]] = None,
 ):
     used_variables = [] if used_variables is None else used_variables
     used_subjects = [] if used_subjects is None else used_subjects

@@ -1,3 +1,4 @@
+import copy
 import os
 from dataclasses import dataclass, replace
 from typing import Optional
@@ -12,7 +13,7 @@ import locality.utils.dataset_utils as dset_utils
 DEFAULT_PATH = "data/counterfact"
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class QA_Sample(DataClassJsonMixin):
     query: str
     subject: str
@@ -59,8 +60,8 @@ def generate_synthetic_dataset(
         _,
         _,
         _,
-        used_variables,
         used_subjects,
+        used_variables,
     ) = dset_utils.get_demonstrations(
         relation_subj_obj_mapping,
         num_options,
@@ -79,7 +80,20 @@ def generate_synthetic_dataset(
 
     qa_pairs: list[QA_Sample] = []
 
-    while len(qa_pairs) < batch_size:
+    # print(used_variables)
+    # print(used_subjects)
+
+    indices = list(range(len(relation_subj_obj_mapping)))
+    np.random.shuffle(indices)
+
+    # while len(qa_pairs) < batch_size:
+    for idx in indices:
+        subj, ans = relation_subj_obj_mapping[idx]
+        if subj in used_subjects:
+            continue
+        # print(
+        #     f"{len(qa_pairs)}/{batch_size} ==> {len(used_subjects)} | {len(used_variables)}"
+        # )
         (
             cur_query,
             cur_answer,
@@ -93,8 +107,8 @@ def generate_synthetic_dataset(
             num_icl=1,
             variable_binding_template=variable_binding_template,
             query_template=last_query,
-            used_variables=used_variables,
-            used_subjects=used_subjects,
+            used_variables=copy.copy(used_variables),
+            used_subjects=copy.copy(used_subjects),
         )
         qa_pairs.append(
             QA_Sample(
@@ -104,6 +118,9 @@ def generate_synthetic_dataset(
                 answer=cur_answer[0],
             )
         )
+
+        if len(qa_pairs) == batch_size:
+            break
 
     return VariableBindingFactRecallDataset(
         few_shot_examples=icl_examples, qa_samples=qa_pairs
