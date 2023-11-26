@@ -3,12 +3,11 @@ from dataclasses import dataclass
 from typing import Any, Callable, Optional, Union
 
 import baukit
+import locality.utils.tokenizer_utils as tokenizer_utils
 import names
 import numpy as np
 import torch
 from dataclasses_json import DataClassJsonMixin
-
-import locality.utils.tokenizer_utils as tokenizer_utils
 from locality.models import ModelandTokenizer
 
 logger = logging.getLogger(__name__)
@@ -299,6 +298,38 @@ def get_h(
 
     h = {
         layer: untuple(traces[layer].output)[:, subject_end - 1].squeeze()
+        for layer in layers
+    }
+    return h
+
+
+@torch.inference_mode()
+def get_rome_key(
+    mt: ModelandTokenizer,
+    prompt: str,
+    subject: str,
+    layers: list[str],
+) -> dict[str, torch.Tensor]:
+    tokenized = mt.tokenizer(
+        prompt, return_offsets_mapping=True, return_tensors="pt"
+    ).to(mt.model.device)
+    offset_mapping = tokenized.pop("offset_mapping")[0]
+    if "token_type_ids" in tokenized:
+        tokenized.pop("token_type_ids")
+
+    subject_start, subject_end = find_token_range(
+        prompt, subject, tokenizer=mt.tokenizer, offset_mapping=offset_mapping
+    )
+
+    # subj_last_idx = subject_end - 1
+    # print(f"edit_index={subj_last_idx}")
+    # print(f"edit_token={mt.tokenizer.decode(tokenized['input_ids'][0][subj_last_idx])}")
+
+    with baukit.TraceDict(module=mt.model, layers=layers, retain_input=True) as traces:
+        mt.model(**tokenized)
+
+    h = {
+        layer: untuple(traces[layer].input)[:, subject_end - 1].squeeze()
         for layer in layers
     }
     return h

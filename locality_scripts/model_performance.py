@@ -1,16 +1,16 @@
 import argparse
 import logging
-
-import numpy as np
-from tqdm import tqdm
+import os
 
 import locality.metric as metric
+import numpy as np
 from causal_trace.utils import ModelandTokenizer
 from dsets.counterfact import CounterFactDataset
 from locality.dataset import generate_synthetic_dataset
 from locality.functional import filter_samples_by_model_knowledge, predict_next_token
 from locality.utils import experiment_utils, logging_utils
 from locality.utils.dataclasses import ExperimentResults, SampleResult, TrialResult
+from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +108,8 @@ def measure_model_performance(
         trial_results=[],
     )
 
+    results_dir = os.path.join(results_dir, model_path.split("/")[-1])
+
     for trial_no in range(num_trials):
         logger.info(f"################## Trial {trial_no + 1} ##################")
         trial = run_trial(
@@ -126,7 +128,7 @@ def measure_model_performance(
         experiment_results.trial_results.append(trial)
         experiment_utils.save_results_file(
             results_dir=results_dir,
-            name=f'{model_path.split("/")[-1]}_{counterfact_relation_id}_performance',
+            name=f"{counterfact_relation_id}_VBFR_accuracy",
             results=experiment_results,
         )
         logger.info(f"###############################################\n\n")
@@ -160,14 +162,14 @@ if __name__ == "__main__":
     parser.add_argument(
         "--dataset-size",
         type=int,
-        default=100,
+        default=500,
         help="number of samples per trial",
     )
 
     parser.add_argument(
         "--num-options",
         type=int,
-        default=3,
+        default=20,
         help="number of options to choose from in the query",
     )
 
@@ -192,7 +194,7 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     logging_utils.configure(args)
-    experiment_utils.setup_experiment(args)
+    experiment = experiment_utils.setup_experiment(args)
 
     logger.info(args)
 
@@ -205,5 +207,5 @@ if __name__ == "__main__":
         num_icl=args.num_icl,
         variable_binding_template=args.variable_binding_template,
         query_template=args.query_template,
-        results_dir=args.results_dir,
+        results_dir=experiment.results_dir,
     )

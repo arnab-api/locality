@@ -2,9 +2,8 @@ from typing import Dict, List, Tuple
 
 import numpy as np
 import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
-
 from rome import repr_tools
+from transformers import AutoModelForCausalLM, AutoTokenizer
 from util import nethook
 
 from .memit_hparams import MEMITHyperParams
