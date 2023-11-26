@@ -1,12 +1,11 @@
 import argparse
 import logging
+import os
 from typing import Union
 
 import baukit
-import numpy as np
-from tqdm import tqdm
-
 import locality.metric as metric
+import numpy as np
 from causal_trace.utils import ModelandTokenizer
 from dsets.counterfact import CounterFactDataset
 from locality.dataset import (
@@ -29,6 +28,7 @@ from locality.utils.dataclasses import (
     PatchingTrialResult,
     PredictedToken,
 )
+from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
 
@@ -235,6 +235,7 @@ def layer_significance_experiment(
     query_template=" {} is in {}",
     filter_prompt_template=" {} is located in the country of",
     results_dir: str = "results",
+    seed: int = 123456,
 ):
     mt = ModelandTokenizer(model_path=model_path)
 
@@ -265,6 +266,9 @@ def layer_significance_experiment(
         trial_results=[],
     )
 
+    results_dir = os.path.join(results_dir, model_path.split("/")[-1])
+    results_dir = os.path.join(results_dir, counterfact_relation_id)
+
     for trial_no in range(num_trials):
         logger.info(f"################## Trial {trial_no + 1} ##################")
 
@@ -283,7 +287,7 @@ def layer_significance_experiment(
         experiment_results.trial_results.append(trial)
         experiment_utils.save_results_file(
             results_dir=results_dir,
-            name=f'{model_path.split("/")[-1]}_{counterfact_relation_id}_layer_edit_efficacy',
+            name=f"layer_edit_efficacy_{seed}",
             results=experiment_results,
         )
         logger.info(f"###############################################\n\n")
@@ -372,4 +376,5 @@ if __name__ == "__main__":
         variable_binding_template=args.variable_binding_template,
         query_template=args.query_template,
         results_dir=experiment.results_dir,
+        seed=experiment.seed,
     )
